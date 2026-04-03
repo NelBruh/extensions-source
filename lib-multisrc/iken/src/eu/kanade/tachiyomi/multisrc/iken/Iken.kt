@@ -38,6 +38,14 @@ abstract class Iken(
     override val lang: String,
     override val baseUrl: String,
     val apiUrl: String = baseUrl,
+    /*
+     * the request url structure is like
+     *   $apiUrl/api$v1
+     * so that if the Base Api Url changes to add anything after /api, eg:v1
+     * simply set this val
+     * It needs to start with "/"
+     */
+    val v1: String = "",
 ) : HttpSource(),
     ConfigurableSource {
 
@@ -131,7 +139,7 @@ abstract class Iken(
     }
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val url = "$apiUrl/api/query".toHttpUrl().newBuilder().apply {
+        val url = "$apiUrl/api$v1/query".toHttpUrl().newBuilder().apply {
             addQueryParameter("page", page.toString())
             addQueryParameter("perPage", PER_PAGE.toString())
             addQueryParameter("searchTerm", query.trim())
@@ -286,7 +294,7 @@ abstract class Iken(
     /**
      * The request to the search page (or another one) that have the genres list.
      */
-    protected open fun genresRequest(): Request = GET("$apiUrl/api/genres", headers)
+    protected open fun genresRequest(): Request = GET("$apiUrl/api$v1/genres", headers)
 
     /**
      * Get the genres from the search page document.
@@ -309,7 +317,7 @@ abstract class Iken(
         try {
             client.newCall(
                 POST(
-                    "$apiUrl/api/analytics/updateViews",
+                    "$apiUrl/api$v1/analytics/updateViews",
                     headers,
                     ViewQuery(postId, chapterId)
                         .toJsonString()
@@ -357,7 +365,7 @@ abstract class Iken(
             body.extractNextJsRsc<Post<ChapterListResponse>>()
         }.getOrNull() ?: run {
             val userId = userIdRegex.find(body)?.groupValues?.get(1).orEmpty()
-            val chapterUrl = "$apiUrl/api/chapters?postId=$id&skip=0&take=900&order=desc&userid=$userId"
+            val chapterUrl = "$apiUrl/api$v1/chapters?postId=$id&skip=0&take=900&order=desc&userid=$userId"
 
             client.newCall(GET(chapterUrl, headers))
                 .execute()
