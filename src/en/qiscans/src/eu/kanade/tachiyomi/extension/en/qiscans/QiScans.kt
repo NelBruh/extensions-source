@@ -1,17 +1,96 @@
 package eu.kanade.tachiyomi.extension.en.qiscans
 
-import androidx.preference.PreferenceScreen
-import androidx.preference.SwitchPreferenceCompat
-import eu.kanade.tachiyomi.multisrc.iken.Iken
+import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.interceptor.rateLimit
+import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
+import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
+import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.parseAs
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.parser.Parser
-import rx.Observable
 import java.util.concurrent.TimeUnit
 
+class QiScans : HttpSource() {
+    override val name = "QiScans"
+    override val lang = "en"
+    override val baseUrl = "https://qimanhwa.com"
+    val apiUrl: String = "https://api.qimanhwa.com/api/v1"
+    override val supportsLatest = true
+
+    override val client = super.client.newBuilder()
+        .rateLimit(3, 1, TimeUnit.SECONDS)
+        .build()
+
+    override fun chapterListParse(response: Response): List<SChapter> {
+        TODO("Not yet implemented")
+    }
+
+    override fun imageUrlParse(response: Response): String {
+        TODO("Not yet implemented")
+    }
+
+    // =============================== Latest ===============================
+
+    override fun latestUpdatesRequest(page: Int): Request {
+        val url = "$apiUrl/series".toHttpUrl().newBuilder().apply {
+            addQueryParameter("page", page.toString())
+            addQueryParameter("perPage", "20")
+            addQueryParameter("sort", "latest")
+        }.build()
+        return GET(url, headers)
+    }
+
+    override fun latestUpdatesParse(response: Response): MangasPage {
+        val res = response.parseAs<SearchResponse>()
+        var page = res.currentPage
+        var hasNext = !res.nextPage.equals(null)
+        val entries = res.data.filterNot { it.type == "NOVEL" }.map { it.toSManga() }
+        return MangasPage(entries, hasNext)
+    }
+
+    override fun mangaDetailsParse(response: Response): SManga {
+        TODO("Not yet implemented")
+    }
+
+    override fun pageListParse(response: Response): List<Page> {
+        TODO("Not yet implemented")
+    }
+
+    override fun popularMangaRequest(page: Int): Request {
+        val url = "$apiUrl/series".toHttpUrl().newBuilder().apply {
+            addQueryParameter("page", page.toString())
+            addQueryParameter("perPage", "20")
+            addQueryParameter("sort", "popular")
+        }.build()
+        return GET(url, headers)
+    }
+
+    override fun searchMangaParse(response: Response): MangasPage {
+        TODO("Not yet implemented")
+    }
+
+    override fun searchMangaRequest(
+        page: Int,
+        query: String,
+        filters: FilterList,
+    ): Request {
+        TODO("Not yet implemented")
+    }
+
+    override fun popularMangaParse(response: Response): MangasPage {
+        val res = response.parseAs<SearchResponse>()
+        var page = res.currentPage
+        var hasNext = !res.nextPage.equals(null)
+        val entries = res.data.filterNot { it.type == "NOVEL" }.map { it.toSManga() }
+        return MangasPage(entries, hasNext)
+    }
+}
+
+/*
 class QiScans :
     Iken(
         "Qi Scans",
@@ -62,3 +141,4 @@ class QiScans :
         private fun decodeHtmlEntities(value: String): String = Parser.unescapeEntities(value, false)
     }
 }
+*/
