@@ -15,6 +15,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
 import okhttp3.Request
 import okhttp3.Response
+import java.net.URLDecoder
 
 class Softkomik : HttpSource() {
     override val name = "Softkomik"
@@ -213,7 +214,17 @@ class Softkomik : HttpSource() {
     // ============================= Utilities ==============================
 
     private fun imageInterceptor(chain: Interceptor.Chain): Response {
-        val request = chain.request()
+        val originalRequest = chain.request()
+        val userAgent = originalRequest.header("User-Agent")
+        val normalizedUserAgent = normalizeUserAgent(userAgent)
+
+        val request = if (normalizedUserAgent != userAgent) {
+            originalRequest.newBuilder()
+                .header("User-Agent", normalizedUserAgent.orEmpty())
+                .build()
+        } else {
+            originalRequest
+        }
 
         val response = try {
             chain.proceed(request)
@@ -222,10 +233,16 @@ class Softkomik : HttpSource() {
         }
 
         if (response?.isSuccessful == true) return response
-        response?.close()
 
         val currentHost = cdnUrls.firstOrNull { request.url.toString().startsWith(it) }
-            ?: return throw java.net.UnknownHostException("Unknown CDN host: ${request.url.host}")
+
+        // Only chapter CDN URLs should use retry host fallback.
+        // Non-CDN hosts (e.g. cover URL) should return the original response or throw if it failed, without trying other hosts.
+        if (currentHost == null) {
+            return response ?: throw (java.net.UnknownHostException(request.url.host))
+        }
+
+        response?.close()
 
         val imagePath = request.url.toString().removePrefix(currentHost).removePrefix("/")
         val otherHosts = cdnUrls.filter { it != currentHost }
@@ -248,18 +265,48 @@ class Softkomik : HttpSource() {
     private fun apiAuthInterceptor(chain: Interceptor.Chain): Response {
         val request = chain.request()
 
-        if (!request.url.host.endsWith("softdevices.my.id")) {
+        if (!request.url.host.endsWith("softdevices.my.id") || request.url.toString().startsWith(coverUrl)) {
             return chain.proceed(request)
         }
 
-        val session = getSession()
-
+        val sessionResult = getSession()
         val newRequest = request.newBuilder()
-            .addHeader("X-Token", session.token)
-            .addHeader("X-Sign", session.sign)
+            .header("X-Token", sessionResult.token)
+            .header("X-Sign", sessionResult.sign)
             .build()
 
-        return chain.proceed(newRequest)
+        var response = chain.proceed(newRequest)
+        if (response.code == 403) {
+            response.close()
+
+            // retry once with session from cookie, in case the session from api is invalid but cookie has valid session
+            val cookieSession = getSessionFromCookie()
+            val retryRequest = request.newBuilder()
+                .header("X-Token", cookieSession.token)
+                .header("X-Sign", cookieSession.sign)
+                .build()
+            response = chain.proceed(retryRequest)
+        }
+        return response
+    }
+
+    // because softkomik often changes their api session url,
+    // if the request fails, we can try to get session from cookies but the user needs to open manga details in WebView first to get the session cookies.
+    private fun getSessionFromCookie(): SessionDto {
+        synchronized(this) {
+            val cookies = client.cookieJar.loadForRequest(baseUrl.toHttpUrl())
+
+            val rawValue = cookies.firstOrNull { it.name == "x-m" }?.value ?: throw Exception("Buka manga detail di WebView untuk mendapatkan session, lalu refresh.")
+            val decodedValue = runCatching { URLDecoder.decode(rawValue, Charsets.UTF_8.name()) }
+                .getOrDefault(rawValue)
+
+            val cookieSession = runCatching { decodedValue.parseAs<SessionDto>() }.getOrNull()
+            if (cookieSession == null) {
+                throw Exception("Buka manga detail di WebView untuk mendapatkan session, lalu refresh.")
+            }
+            session = cookieSession
+            return cookieSession
+        }
     }
 
     private fun getSession(): SessionDto {
@@ -289,7 +336,7 @@ class Softkomik : HttpSource() {
                 client.newCall(GET("$baseUrl/api/me", apiHeaders)).execute().close()
             }
 
-            val response = client.newCall(GET("$baseUrl/api/sessions", apiHeaders)).execute()
+            val response = client.newCall(GET("$baseUrl/api/sessions/oqiw918pa", apiHeaders)).execute()
 
             if (!response.isSuccessful) {
                 val code = response.code
@@ -301,6 +348,16 @@ class Softkomik : HttpSource() {
             session = newSession
             return newSession
         }
+    }
+
+    // Normalizes the User-Agent by removing "Mobile Safari" because it can cause 401 errors.
+    private fun normalizeUserAgent(userAgent: String?): String? {
+        if (userAgent.isNullOrBlank()) return null
+
+        return userAgent
+            .replace(userAgentMobileSafariRegex, "")
+            .trim()
+            .ifEmpty { null }
     }
 
     override fun getFilterList() = FilterList(
@@ -315,6 +372,7 @@ class Softkomik : HttpSource() {
 
     private val apiUrl = "https://v2.softdevices.my.id"
     private val coverUrl = "https://cover.softdevices.my.id/softkomik-cover"
+    private val userAgentMobileSafariRegex = Regex("""\s*Mobile Safari/\d+(?:\.\d+)*""", RegexOption.IGNORE_CASE)
     private val cdnUrls = listOf(
         "https://psy1.komik.im",
         "https://image.komik.im/softkomik",
